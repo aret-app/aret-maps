@@ -32,6 +32,28 @@ the script fails if a build goes over it.
 ### Inspect
 Drag `out/pilot.pmtiles` onto [pmtiles.io](https://pmtiles.io) to browse the tiles and their layers.
 
+### Deploy to Cloudflare Pages
+The tiles are served from the Cloudflare Pages project **`aret-tiles`**
+([ADR-0005](https://github.com/aret-app/aret-docs/blob/main/docs/adr/0005-tile-format-and-hosting.md)):
+
+```
+https://aret-tiles.pages.dev/tiles/{z}/{x}/{y}.pbf      (maxzoom 14)
+https://aret-tiles.pages.dev/tiles/metadata.json
+```
+
+One-time setup on your computer:
+```bash
+npx wrangler login      # opens the browser; run it outside this repo if you can
+cp .env.example .env    # private settings, git-ignored
+```
+Then, after `scripts/build-pilot.sh files`:
+```bash
+scripts/deploy-pages.sh
+```
+The script copies `out/tiles/` and [`site/_headers`](site/_headers) (content type, CORS, caching) into
+`out/site/`, checks the Pages limits and runs Wrangler (version pinned in the script).
+Never commit `.env`, `.wrangler/` or any API token.
+
 ### Attribution (required on every map using these tiles)
 Tiles built with the [OpenMapTiles](https://github.com/openmaptiles/openmaptiles#license) schema are reusable
 under CC-BY, and maps made with them **must display a visible credit**:
