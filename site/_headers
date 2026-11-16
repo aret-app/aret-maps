@@ -1,0 +1,14 @@
+# Cloudflare Pages response headers (copied into out/site/ by scripts/deploy-pages.sh)
+# https://developers.cloudflare.com/pages/configuration/headers/
+
+# Tiles: /tiles/{z}/{x}/{y}.pbf  (placeholders match one path segment each, so this
+# rule doesn't also hit /tiles/metadata.json — Pages applies every matching rule)
+/tiles/:z/:x/:y
+  Content-Type: application/x-protobuf
+  Access-Control-Allow-Origin: *
+  Cache-Control: public, max-age=86400
+
+/tiles/metadata.json
+  Content-Type: application/json
+  Access-Control-Allow-Origin: *
+  Cache-Control: public, max-age=3600

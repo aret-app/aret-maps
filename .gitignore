@@ -1,0 +1,18 @@
+# Downloaded inputs (OSM extracts, sea polygons, Natural Earth) — large, re-downloadable
+data/
+
+# Build output (tiles) — deployed by CI, never committed
+out/
+
+# Cloudflare Wrangler local state/cache (contains your account details)
+.wrangler/
+
+# Private local config: account IDs, tokens, personal settings.
+# Commit only *.example templates, never the real files.
+.env
+.env.*
+!.env.example
+.dev.vars
+*.local.json
+
+.DS_Store
