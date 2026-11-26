@@ -1,0 +1,6 @@
+# Everyone (and CI) builds with exactly this Rust version; rustup installs it automatically.
+# Bump deliberately in its own pull request.
+[toolchain]
+channel = "1.100.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

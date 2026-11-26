@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# Publishes the pilot-region tile folder (out/tiles/) to Cloudflare Pages — ADR-0005.
+# Publishes the pilot-region tile folder (out/tiles/) to Cloudflare Pages — ADR-0005 — and, when
+# built, the route catalogue (out/routes/: tiles + index.json, ADR-0015).
 #
 # Usage:  scripts/deploy-pages.sh
 # Needs:  - out/tiles/ from:  scripts/build-pilot.sh files
+#         - optional out/routes/ from:  scripts/build-routes.sh  (a deploy replaces everything,
+#           so without it the routes disappear from the site)
 #         - Node.js (runs Wrangler through npx at a pinned version)
 #         - on your computer: `npx wrangler login` once
 #           in CI: CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID environment variables
@@ -24,6 +27,14 @@ rm -rf out/site
 mkdir -p out/site
 cp site/_headers out/site/_headers
 cp -R out/tiles out/site/tiles
+if [[ -d out/routes/tiles ]]; then
+  mkdir -p out/site/routes
+  cp -R out/routes/tiles/. out/site/routes/
+  cp out/routes/index.json out/site/routes/index.json
+  echo "    routes: $(find out/site/routes -name '*.pbf' | wc -l | tr -d ' ') tiles + index.json"
+else
+  echo "    routes: not built (scripts/build-routes.sh), not published"
+fi
 
 # Cloudflare Pages limits (ADR-0005): 20,000 files and 25 MB per file per deployment
 count=$(find out/site -type f | wc -l | tr -d ' ')
@@ -39,3 +50,7 @@ npx --yes "wrangler@${WRANGLER_VERSION}" pages deploy out/site \
 echo
 echo "Tiles:    https://${PROJECT}.pages.dev/tiles/{z}/{x}/{y}.pbf"
 echo "Metadata: https://${PROJECT}.pages.dev/tiles/metadata.json"
+if [[ -d out/site/routes ]]; then
+  echo "Routes:   https://${PROJECT}.pages.dev/routes/{z}/{x}/{y}.pbf   (layer \"routes\")"
+  echo "Index:    https://${PROJECT}.pages.dev/routes/index.json"
+fi

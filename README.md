@@ -70,3 +70,53 @@ Code in this repository is BSD-3-Clause.
 | `out/pilot.pmtiles` | 127 MB |
 | `out/tiles/` | 8,430 tiles, 195 MB (z14: 6,240 · z13: 1,584 · z12: 425 · z11: 117 · z0–z10: 64) |
 | Cloudflare Pages limits | ✓ under 20,000 files and 25 MB per file |
+
+## Pre-built routes
+
+Ready-made hiking routes from OpenStreetMap route relations, mostly CAI trails
+([ADR-0015](https://github.com/aret-app/aret-docs/blob/main/docs/adr/0015-prebuilt-routes-open-data.md),
+aret-maps#4). The Rust tool [`tools/route-catalogue`](tools/route-catalogue/src/main.rs) reads the same
+Italy extract as the tiles, keeps every `type=route` + `route=hiking` relation touching the area, and joins
+each route's ways into lines.
+
+**Safety rules (ADR-0015):** gaps are **never bridged**. A route whose ways don't all connect keeps its
+pieces separate and is marked `complete: false`. Fix it in OpenStreetMap: the next build picks it up.
+**Difficulty only from tags** (`cai_scale`, then `sac_scale`); otherwise `"unknown"`, never guessed.
+Names are never invented: many CAI routes only have a `ref` (show them as "CAI 117").
+
+### Build
+Needs Rust ([rustup](https://rustup.rs); the version is pinned in `rust-toolchain.toml`) and
+`brew install tippecanoe`, plus `data/sources/italy.osm.pbf` from `scripts/build-pilot.sh`.
+```bash
+scripts/build-routes.sh test   # ~30 routes around Pania della Croce (TEST_BBOX), to try things out
+scripts/build-routes.sh        # whole pilot region, ~3,500 routes, ~1 minute
+```
+Output in `out/routes/`:
+
+| File | What | Published |
+|---|---|---|
+| `routes.geojson` | Full catalogue: MultiLineString per route + all fields | no (32 MB, over Pages' 25 MB limit) |
+| `index.json` | Every route's fields + `bbox`, no geometry (list and search) | `/routes/index.json` |
+| `tiles/` | Vector tiles, layer `routes`, z9–14, clipped to the area | `/routes/{z}/{x}/{y}.pbf` |
+| `report.md` | Complete/incomplete counts, incomplete CAI routes with OSM links | no |
+
+Fields: `osm_id`, `osm_url`, `name`, `ref` (CAI number), `network` (`lwn`/`rwn`/`nwn`/`iwn`),
+`operator`, `cai`, `difficulty` (+ `difficulty_source`), `from`, `to`, `osmc_symbol` (waymark),
+`length_m` (WGS 84 ellipsoid), `pieces`, `missing_ways`, `has_sub_routes`, `complete`. Ascent and
+descent come later, with elevation data (DEM).
+
+`scripts/deploy-pages.sh` publishes the routes together with the basemap tiles when `out/routes/`
+exists. A deploy replaces the whole site, so build both first.
+
+**Licence:** the catalogue is derived from OpenStreetMap, so as a database it is **ODbL**, and every map
+or export showing routes credits "© OpenStreetMap contributors".
+
+### Last build (2026-11-26, extract of 2026-11-15)
+| | |
+|---|---|
+| Routes touching the pilot area | 3,487 (23,332 km): 3,396 complete (97%), 91 incomplete |
+| CAI routes | 3,164: 3,101 complete (98%), 63 incomplete |
+| Difficulty | E 2,448 · T 477 · EE 193 · EEA 5 · unknown 354 |
+| Vector tiles | 5,607 tiles, 28 MB, largest 189 KB (z14: 3,942 · z13: 1,185 · z12: 340 · z11: 97 · z10: 31 · z9: 12) |
+| With the basemap | ~14,040 files: ✓ under Cloudflare Pages' 20,000-file limit |
+| Run time | ~50 s, ~1 GB memory (Apple Silicon) |

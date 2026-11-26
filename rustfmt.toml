@@ -1,0 +1,10 @@
+# `cargo fmt` settings — Google Rust style guide, "Code Formatting":
+# https://google.github.io/styleguide/rustguide.html
+style_edition = "2024"
+max_width = 100
+
+# The guide also recommends these, but they are nightly-only rustfmt options; on stable Rust
+# the guide allows omitting them. Follow them by hand instead:
+#   imports_granularity = "Module"  → one module per `use`: `use a::b::{C, D};`, never `use a::{b::C, d::E};`
+#   hex_literal_case = "Lower"      → 0xff, not 0xFF
+#   format_macro_matchers = true

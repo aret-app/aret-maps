@@ -1,0 +1,4 @@
+# Clippy settings. Tests may panic for assertions (Google Rust style guide, "Testing"),
+# so `unwrap`/`expect` are allowed there while `clippy::unwrap_used` warns elsewhere.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
