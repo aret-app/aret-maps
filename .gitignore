@@ -16,3 +16,6 @@ out/
 *.local.json
 
 .DS_Store
+
+# Rust build output
+target/

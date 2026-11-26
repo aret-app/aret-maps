@@ -1,0 +1,20 @@
+# CI for aret-maps: the shared Rust checks from aret-infra (fmt, clippy, tests, cargo-deny) for the
+# tools in tools/. Building tiles needs the 2 GB OSM extract and runs on a developer's machine.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  rust:
+    uses: aret-app/aret-infra/.github/workflows/rust-ci.yml@main

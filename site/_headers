@@ -12,3 +12,19 @@
   Content-Type: application/json
   Access-Control-Allow-Origin: *
   Cache-Control: public, max-age=3600
+
+# Pre-built routes (ADR-0015): /routes/{z}/{x}/{y}.pbf, layer "routes"
+/routes/:z/:x/:y
+  Content-Type: application/x-protobuf
+  Access-Control-Allow-Origin: *
+  Cache-Control: public, max-age=86400
+
+/routes/metadata.json
+  Content-Type: application/json
+  Access-Control-Allow-Origin: *
+  Cache-Control: public, max-age=3600
+
+/routes/index.json
+  Content-Type: application/json
+  Access-Control-Allow-Origin: *
+  Cache-Control: public, max-age=3600
