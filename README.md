@@ -108,6 +108,23 @@ descent come later, with elevation data (DEM).
 `scripts/deploy-pages.sh` publishes the routes together with the basemap tiles when `out/routes/`
 exists. A deploy replaces the whole site, so build both first.
 
+## Weekly rebuild (GitHub Actions)
+
+[`.github/workflows/publish-tiles.yml`](.github/workflows/publish-tiles.yml) rebuilds and republishes the
+pilot region **every Monday at 03:00 UTC** from a fresh OpenStreetMap extract (ADR-0017), so fixes made in
+OpenStreetMap reach Aret within a week. It runs the same three scripts as above, with pinned Planetiler,
+tippecanoe and Rust.
+
+- **Downloads:** the Italy extract once a week from Geofabrik. Sea polygons and Natural Earth are cached
+  for a month.
+- **Safety:** it won't publish if the new build has more than 10% fewer routes than the live site. The
+  build summary shows the route report; `report.md` and `index.json` are kept as artifacts for 30 days.
+- **Manual run:** Actions → *Publish map tiles* → *Run workflow*. Untick **deploy** for a dry run.
+- **Pull requests** that change the build scripts, `config/`, `site/` or the workflow get a dry run.
+- **Secrets** (Settings → Secrets and variables → Actions): `CLOUDFLARE_API_TOKEN`, a token with only
+  the *Cloudflare Pages: Edit* permission, and `CLOUDFLARE_ACCOUNT_ID`. Without them, publishing fails
+  with a clear message; dry runs don't need them.
+
 **Licence:** the catalogue is derived from OpenStreetMap, so as a database it is **ODbL**, and every map
 or export showing routes credits "© OpenStreetMap contributors".
 

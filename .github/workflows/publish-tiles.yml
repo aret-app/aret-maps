@@ -1,0 +1,167 @@
+# Weekly rebuild of the pilot-region map: basemap tiles + pre-built routes, published to
+# Cloudflare Pages (ADR-0005, ADR-0015, ADR-0017). Runs the same scripts as a laptop:
+# scripts/build-pilot.sh, scripts/build-routes.sh, scripts/deploy-pages.sh.
+#
+#   schedule      every Monday 03:00 UTC: fresh OpenStreetMap extract → build → publish
+#   manual run    Actions → "Publish map tiles" → Run workflow ("deploy" unticked = dry run)
+#   pull request  touching the build scripts or this file → dry run (build + checks, no publish)
+#
+# Publishing needs two repository secrets (Settings → Secrets and variables → Actions):
+#   CLOUDFLARE_API_TOKEN   token with the "Cloudflare Pages: Edit" permission only
+#   CLOUDFLARE_ACCOUNT_ID  the Cloudflare account that owns the aret-tiles project
+
+name: Publish map tiles
+
+on:
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: Publish to Cloudflare Pages (untick for a dry run)
+        type: boolean
+        default: true
+  pull_request:
+    paths:
+      - .github/workflows/publish-tiles.yml
+      - scripts/**
+      - config/**
+      - site/**
+
+permissions:
+  contents: read
+
+# Never two builds at once; a running publish is never cancelled halfway
+concurrency:
+  group: publish-tiles
+  cancel-in-progress: false
+
+env:
+  PLANETILER_VERSION: "0.10.2"
+  PLANETILER_SHA256: "f310bd0413e2e4512b27f4046d418664e8e1d3bf31603c2a70e23de06c167e4d"
+  TIPPECANOE_VERSION: "2.79.0"
+
+jobs:
+  build:
+    name: build${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.deploy)) && ' and publish' || ' (dry run)' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Free disk space (preinstalled SDKs we don't use)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      # ---- tools, pinned
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install Planetiler ${{ env.PLANETILER_VERSION }}
+        run: |
+          mkdir -p "$HOME/bin"
+          curl -fsSL -o "$HOME/bin/planetiler.jar" \
+            "https://github.com/onthegomap/planetiler/releases/download/v${PLANETILER_VERSION}/planetiler.jar"
+          echo "${PLANETILER_SHA256}  $HOME/bin/planetiler.jar" | sha256sum --check
+          # Same command name as Homebrew's launcher, so build-pilot.sh runs unchanged
+          printf '#!/bin/sh\nexec java -Xmx8g -jar "$HOME/bin/planetiler.jar" "$@"\n' > "$HOME/bin/planetiler"
+          chmod +x "$HOME/bin/planetiler"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+
+      - name: Cache tippecanoe ${{ env.TIPPECANOE_VERSION }}
+        id: tippecanoe-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/tippecanoe
+          key: tippecanoe-${{ env.TIPPECANOE_VERSION }}-ubuntu-24.04
+
+      - name: Build tippecanoe ${{ env.TIPPECANOE_VERSION }}
+        if: steps.tippecanoe-cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y gcc g++ make libsqlite3-dev zlib1g-dev
+          git clone --depth 1 --branch "${TIPPECANOE_VERSION}" https://github.com/felt/tippecanoe.git /tmp/tippecanoe-src
+          make -C /tmp/tippecanoe-src -j"$(nproc)" tippecanoe
+          mkdir -p ~/tippecanoe
+          cp /tmp/tippecanoe-src/tippecanoe ~/tippecanoe/
+
+      - name: Put tippecanoe on PATH
+        run: echo "$HOME/tippecanoe" >> "$GITHUB_PATH"
+
+      - name: Install pinned Rust (rust-toolchain.toml)
+        run: rustup toolchain install
+
+      # ---- inputs: the OSM extract is always downloaded fresh; the slow-changing sea polygons and
+      # Natural Earth data are cached for a month, to be gentle with their hosts
+      - name: Month (cache key)
+        id: month
+        run: echo "month=$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache sea polygons and Natural Earth
+        uses: actions/cache@v5
+        with:
+          path: |
+            data/sources/water-polygons-split-3857.zip
+            data/sources/natural_earth_vector.sqlite.zip
+            data/sources/lake_centerline.shp.zip
+          key: planetiler-sources-${{ steps.month.outputs.month }}
+
+      # ---- build
+      - name: Basemap tiles (downloads the Italy extract)
+        run: scripts/build-pilot.sh files
+
+      - name: Pre-built routes
+        run: scripts/build-routes.sh
+
+      - name: Sanity check against what is published
+        run: |
+          built=$(jq '.routes | length' out/routes/index.json)
+          published=$(curl -fsS https://aret-tiles.pages.dev/routes/index.json | jq '.routes | length' || echo 0)
+          echo "routes: built ${built}, published ${published}"
+          # A broken download or a bad OSM edit shouldn't wipe the catalogue: refuse to drop >10%
+          if (( published > 0 && built * 10 < published * 9 )); then
+            echo "::error::Only ${built} routes built, ${published} published: more than 10% fewer, not publishing"
+            exit 1
+          fi
+
+      - name: Report
+        if: always()
+        run: |
+          if [[ -f out/routes/report.md ]]; then
+            {
+              echo "**Basemap:** $(find out/tiles -name '*.pbf' 2>/dev/null | wc -l | tr -d ' ') tiles"
+              echo
+              cat out/routes/report.md
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: route-report
+          path: |
+            out/routes/report.md
+            out/routes/index.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+      # ---- publish (scheduled runs and manual runs with "deploy" ticked)
+      - uses: actions/setup-node@v7
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.deploy)
+        with:
+          node-version: "24"
+
+      - name: Publish to Cloudflare Pages
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.deploy)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [[ -z "$CLOUDFLARE_API_TOKEN" || -z "$CLOUDFLARE_ACCOUNT_ID" ]]; then
+            echo "::error::CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID secrets are not set (see the top of this file)"
+            exit 1
+          fi
+          scripts/deploy-pages.sh
