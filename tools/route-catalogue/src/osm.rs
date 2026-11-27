@@ -188,6 +188,14 @@ fn hiking_route(relation: &osmpbf::Relation<'_>) -> Option<RouteRelation> {
     })
 }
 
+/// When the OpenStreetMap data in the file was current (header `osmosis_replication_timestamp`),
+/// in seconds since 1970, if the file says.
+pub fn extract_timestamp(path: &Path) -> Option<i64> {
+    let mut blobs = osmpbf::BlobReader::from_path(path).ok()?;
+    let header = blobs.next()?.ok()?.to_headerblock().ok()?;
+    header.osmosis_replication_timestamp()
+}
+
 /// The feature as a [`Place`] if its tags make it one.
 fn place(
     osm_type: &'static str,

@@ -142,6 +142,17 @@ fn run(
         output.join("index.json"),
         serde_json::to_vec(&catalogue::to_index(&routes))?,
     )?;
+    // For the published catalogue's version.json (scripts/build-routes.sh)
+    std::fs::write(
+        output.join("meta.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "osm_timestamp": osm::extract_timestamp(input),
+            "routes": routes.len(),
+            "places": places.len(),
+            "area": [area.west, area.south, area.east, area.north],
+            "elevation": dem.is_some(),
+        }))?,
+    )?;
     let mut report = catalogue::report(&routes, area, check.as_ref());
     report.push('\n');
     report.push_str(&places::report(&places));

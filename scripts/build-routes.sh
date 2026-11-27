@@ -8,7 +8,9 @@
 #         out/routes/report.md       complete/incomplete counts, incomplete CAI routes to fix in OSM,
 #                                    elevation checks, places counts
 #         out/places/places.geojson  places index: peaks, passes, huts, water, trailheads,
-#                                    settlements (aret-maps#6; not published, for the backend)
+#                                    settlements (aret-maps#6)
+#         out/catalogue/             both, gzip-compressed, + version.json: published for the
+#                                    backend's places-svc (aret-backend#24)
 #         out/routes/tiles/          vector tiles, layer "routes", z9–14, clipped to the area (published)
 #
 # Needs: data/sources/italy.osm.pbf (downloaded by scripts/build-pilot.sh), Rust (rustup),
@@ -50,6 +52,32 @@ tippecanoe --force --quiet \
   -y osm_id -y name -y ref -y network -y cai -y difficulty -y complete -y osmc_symbol -y length_m \
   -y ascent_m -y descent_m -y ele_max -y duration_min -y duration_reverse_min \
   out/routes/routes.geojson
+
+echo "==> Catalogue files for the backend: out/catalogue/ (aret-backend#24)"
+# The full catalogue is over Pages' 25 MB file limit as plain GeoJSON, but ~11 MB compressed.
+# version.json lets places-svc see a new build and check the downloads.
+rm -rf out/catalogue && mkdir -p out/catalogue
+gzip -9 -c out/routes/routes.geojson > out/catalogue/routes.geojson.gz
+gzip -9 -c out/places/places.geojson > out/catalogue/places.geojson.gz
+sha() { shasum -a 256 "$1" | cut -d' ' -f1; }
+size() { wc -c < "$1" | tr -d ' '; }
+jq -n \
+  --slurpfile meta out/routes/meta.json \
+  --arg built_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --arg routes_sha "$(sha out/catalogue/routes.geojson.gz)" --argjson routes_size "$(size out/catalogue/routes.geojson.gz)" \
+  --arg places_sha "$(sha out/catalogue/places.geojson.gz)" --argjson places_size "$(size out/catalogue/places.geojson.gz)" \
+  '{
+    built_at: $built_at,
+    osm_data_at: (if $meta[0].osm_timestamp then ($meta[0].osm_timestamp | todate) else null end),
+    area: $meta[0].area,
+    license: "ODbL-1.0",
+    attribution: "© OpenStreetMap contributors",
+    files: {
+      routes: { path: "routes.geojson.gz", count: $meta[0].routes, bytes: $routes_size, sha256: $routes_sha },
+      places: { path: "places.geojson.gz", count: $meta[0].places, bytes: $places_size, sha256: $places_sha }
+    }
+  }' > out/catalogue/version.json
+echo "    $(du -h out/catalogue/routes.geojson.gz | cut -f1) routes, $(du -h out/catalogue/places.geojson.gz | cut -f1) places, OSM data of $(jq -r .osm_data_at out/catalogue/version.json)"
 
 count=$(find out/routes/tiles -name '*.pbf' | wc -l | tr -d ' ')
 echo "    tiles: $count   total size: $(du -sh out/routes/tiles | cut -f1)"
