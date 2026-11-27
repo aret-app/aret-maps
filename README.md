@@ -109,6 +109,34 @@ descent come later, with elevation data (DEM).
 `scripts/deploy-pages.sh` publishes the routes together with the basemap tiles when `out/routes/`
 exists. A deploy replaces the whole site, so build both first.
 
+## Places index (aret-maps#6)
+
+The same run of `scripts/build-routes.sh` also writes **`out/places/places.geojson`**: the places hikers
+search for by name (ADR-0017), from the same OpenStreetMap read, so it costs about 10 seconds more.
+
+| Kind (`kind`) | From OpenStreetMap (`type`) |
+|---|---|
+| `peak` | `natural=peak`, `natural=volcano` |
+| `pass` | `mountain_pass=yes`, `natural=saddle` |
+| `hut` | `tourism=alpine_hut` (staffed *rifugio*), `tourism=wilderness_hut` (*bivacco*), `amenity=shelter` (not bus stop or picnic shelters) |
+| `water` | `natural=spring`, `amenity=drinking_water` (`drinking_water=yes/no` kept: it matters) |
+| `trailhead` | `highway=trailhead`, and car parks within 300 m of a route end |
+| `settlement` | `place=city/town/village/hamlet` |
+
+- **Huts and car parks drawn as areas** become a point at their centre.
+- **Each place** has `name`, `alt_name`, `ele` with `ele_source` (`osm` tag, else `dem` from TINITALY), and
+  `osm_url`; huts also have `operator` and `capacity`.
+- **Names are never invented:** places without a name stay in the file for the map, with
+  `searchable: false`.
+- **Not deduplicated:** features with the same name close together are usually different things (two
+  points of a pass, vents of a mud volcano).
+- **Not published:** the file (ODbL) is for the backend's place search (aret-app/aret-backend#24). At
+  7.4 MB it would fit on Pages if needed.
+
+Pilot region (2026-11-27): 22,089 places, of which searchable by name are 3,009 peaks, 512 passes, 233 huts,
+725 water points, 339 trailheads and 7,708 settlements. Spot-checked: Pania della Croce, Monte Cimone,
+Rifugio Enrico Rossi, Rifugio Cesare Battisti, Foce di Mosceta, Passo del Vestito, Levigliani, 46 bivouacs.
+
 ## Weekly rebuild (GitHub Actions)
 
 [`.github/workflows/publish-tiles.yml`](.github/workflows/publish-tiles.yml) rebuilds and republishes the
