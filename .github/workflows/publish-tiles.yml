@@ -118,19 +118,38 @@ jobs:
           mkdir -p data/sources
           fetch() { curl -fL --retry 5 --retry-all-errors --retry-delay 60 --connect-timeout 30 -o "$2" "$1"; }
 
-          # Italy extract, always fresh. Checked against Geofabrik's MD5; if the file was replaced
-          # between the two requests (daily update), try again.
+          # Italy extract, always fresh. First Geofabrik, checked against its MD5 (tried again if the
+          # daily update lands between the two requests). If Geofabrik stays unreachable after the
+          # retries (it has refused GitHub runners for hours at a time), the same extract from
+          # OpenStreetMap France, which publishes no checksum: a truncated file fails in Planetiler,
+          # and the route sanity check below still guards what gets published.
           pbf="data/sources/${OSM_AREA}.osm.pbf"
-          for attempt in 1 2 3; do
-            expected=$(curl -fsSL --retry 5 --retry-all-errors --retry-delay 60 "${OSM_DOWNLOAD_URL}.md5" | cut -d' ' -f1)
-            fetch "$OSM_DOWNLOAD_URL" "$pbf"
-            if echo "${expected}  ${pbf}" | md5sum --check --status; then
-              echo "✓ ${pbf}: $(du -h "$pbf" | cut -f1), MD5 ok"
-              break
+          from_geofabrik() {
+            local attempt expected
+            for attempt in 1 2 3; do
+              expected=$(curl -fsSL --retry 5 --retry-all-errors --retry-delay 60 --connect-timeout 30 \
+                "${OSM_DOWNLOAD_URL}.md5" | cut -d' ' -f1) || return 1
+              fetch "$OSM_DOWNLOAD_URL" "$pbf" || return 1
+              if echo "${expected}  ${pbf}" | md5sum --check --status; then return 0; fi
+              echo "::warning::MD5 mismatch on attempt ${attempt}, downloading again"
+            done
+            return 1
+          }
+          if from_geofabrik; then
+            source_name="Geofabrik (MD5 ok)"
+          else
+            echo "::warning::Geofabrik unreachable, using the OpenStreetMap France extract"
+            rm -f "$pbf"
+            fetch "$OSM_FALLBACK_URL" "$pbf"
+            # A whole Italy extract is over 2 GB; anything far smaller is an error page or cut short
+            if (( $(stat -c %s "$pbf") < 1000000000 )); then
+              echo "::error::${pbf} is only $(du -h "$pbf" | cut -f1): not a complete extract"
+              exit 1
             fi
-            echo "::warning::MD5 mismatch on attempt ${attempt}, downloading again"
-            if (( attempt == 3 )); then echo "::error::extract failed its MD5 check 3 times"; exit 1; fi
-          done
+            source_name="OpenStreetMap France (fallback)"
+          fi
+          echo "✓ ${pbf}: $(du -h "$pbf" | cut -f1) from ${source_name}"
+          echo "**OSM extract:** ${source_name}, $(du -h "$pbf" | cut -f1)" >> "$GITHUB_STEP_SUMMARY"
 
           # Planetiler 0.10.2's other inputs, only when the monthly cache missed
           while read -r file url; do
