@@ -35,6 +35,10 @@ if [[ -d out/routes/tiles ]]; then
 else
   echo "    routes: not built (scripts/build-routes.sh), not published"
 fi
+if [[ -d out/catalogue ]]; then
+  cp -R out/catalogue out/site/catalogue
+  echo "    catalogue: $(ls out/catalogue | tr '\n' ' ')"
+fi
 
 # Cloudflare Pages limits (ADR-0005): 20,000 files and 25 MB per file per deployment
 count=$(find out/site -type f | wc -l | tr -d ' ')
@@ -53,4 +57,7 @@ echo "Metadata: https://${PROJECT}.pages.dev/tiles/metadata.json"
 if [[ -d out/site/routes ]]; then
   echo "Routes:   https://${PROJECT}.pages.dev/routes/{z}/{x}/{y}.pbf   (layer \"routes\")"
   echo "Index:    https://${PROJECT}.pages.dev/routes/index.json"
+fi
+if [[ -d out/site/catalogue ]]; then
+  echo "Catalogue: https://${PROJECT}.pages.dev/catalogue/version.json (+ routes/places .geojson.gz)"
 fi
