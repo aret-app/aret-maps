@@ -40,6 +40,8 @@ env:
   PLANETILER_VERSION: "0.10.2"
   PLANETILER_SHA256: "f310bd0413e2e4512b27f4046d418664e8e1d3bf31603c2a70e23de06c167e4d"
   TIPPECANOE_VERSION: "2.79.0"
+  # Sent with every download, so the hosts can see who we are and how to reach the project
+  USER_AGENT: "aret-maps weekly map build (+https://github.com/aret-app/aret-maps)"
 
 jobs:
   build:
@@ -96,9 +98,15 @@ jobs:
 
       # ---- inputs: the OSM extract is always downloaded fresh; the slow-changing sea polygons and
       # Natural Earth data are cached for a month, to be gentle with their hosts
-      - name: Month (cache key)
+      - name: Cache keys
         id: month
-        run: echo "month=$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
+        run: |
+          source config/pilot-region.env
+          {
+            echo "month=$(date -u +%Y-%m)"
+            echo "date=$(date -u +%Y-%m-%d)"
+            echo "area=${OSM_AREA}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Cache sea polygons and Natural Earth
         uses: actions/cache@v5
@@ -109,6 +117,16 @@ jobs:
             data/sources/lake_centerline.shp.zip
           key: planetiler-sources-${{ steps.month.outputs.month }}
 
+      # Pull request dry runs only test the build, so they reuse the extract of the latest weekly
+      # build instead of downloading 2+ GB again. Scheduled and manual runs always download fresh.
+      - name: Reuse the latest weekly extract (dry runs only)
+        if: github.event_name == 'pull_request'
+        uses: actions/cache/restore@v5
+        with:
+          path: data/sources/${{ steps.month.outputs.area }}.osm.pbf
+          key: osm-${{ steps.month.outputs.area }}-${{ steps.month.outputs.date }}
+          restore-keys: osm-${{ steps.month.outputs.area }}-
+
       # ---- downloads, with retries: Geofabrik and the other hosts are free services that sometimes
       # refuse connections (GitHub runners share IP addresses with many other projects). Planetiler
       # skips downloading files that already exist, so it never contacts them itself.
@@ -116,7 +134,7 @@ jobs:
         run: |
           source config/pilot-region.env
           mkdir -p data/sources
-          fetch() { curl -fL --retry 5 --retry-all-errors --retry-delay 60 --connect-timeout 30 -o "$2" "$1"; }
+          fetch() { curl -fL -A "$USER_AGENT" --retry 5 --retry-all-errors --retry-delay 60 --connect-timeout 30 -o "$2" "$1"; }
 
           # Italy extract, always fresh. First Geofabrik, checked against its MD5 (tried again if the
           # daily update lands between the two requests). If Geofabrik stays unreachable after the
@@ -127,7 +145,7 @@ jobs:
           from_geofabrik() {
             local attempt expected
             for attempt in 1 2 3; do
-              expected=$(curl -fsSL --retry 5 --retry-all-errors --retry-delay 60 --connect-timeout 30 \
+              expected=$(curl -fsSL -A "$USER_AGENT" --retry 5 --retry-all-errors --retry-delay 60 --connect-timeout 30 \
                 "${OSM_DOWNLOAD_URL}.md5" | cut -d' ' -f1) || return 1
               fetch "$OSM_DOWNLOAD_URL" "$pbf" || return 1
               if echo "${expected}  ${pbf}" | md5sum --check --status; then return 0; fi
@@ -135,7 +153,9 @@ jobs:
             done
             return 1
           }
-          if from_geofabrik; then
+          if [[ "$GITHUB_EVENT_NAME" == pull_request && -f "$pbf" ]]; then
+            source_name="cache of the latest weekly build (dry run)"
+          elif from_geofabrik; then
             source_name="Geofabrik (MD5 ok)"
           else
             echo "::warning::Geofabrik unreachable, using the OpenStreetMap France extract"
@@ -160,6 +180,13 @@ jobs:
           lake_centerline.shp.zip https://github.com/acalcutt/osm-lakelines/releases/download/v12/lake_centerline.shp.zip
           LIST
           ls -lh data/sources
+
+      - name: Keep this extract for dry runs
+        if: github.event_name != 'pull_request'
+        uses: actions/cache/save@v5
+        with:
+          path: data/sources/${{ steps.month.outputs.area }}.osm.pbf
+          key: osm-${{ steps.month.outputs.area }}-${{ steps.month.outputs.date }}
 
       # ---- build
       - name: Basemap tiles
