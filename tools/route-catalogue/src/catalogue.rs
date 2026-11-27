@@ -8,7 +8,8 @@ use serde_json::{Value, json};
 use crate::assemble::{self, Way};
 use crate::dem::Dem;
 use crate::elevation::{self, LineElevation};
-use crate::osm::{NodePositions, Peak, RouteRelation, WayNodes};
+use crate::osm::{NodePositions, RouteRelation, WayNodes};
+use crate::places::{Kind, Place};
 
 /// Area to keep, in degrees: west, south, east, north.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -41,7 +42,8 @@ impl BoundingBox {
         })
     }
 
-    fn contains(&self, (lon, lat): (f64, f64)) -> bool {
+    /// Whether the point (longitude, latitude) is inside.
+    pub fn contains(&self, (lon, lat): (f64, f64)) -> bool {
         (self.west..=self.east).contains(&lon) && (self.south..=self.north).contains(&lat)
     }
 }
@@ -363,12 +365,17 @@ pub struct ElevationCheck {
 }
 
 impl ElevationCheck {
-    /// Compares `routes` (with elevation added) and the summits of `peaks` inside `area`.
-    pub fn new(routes: &[Route], peaks: &[Peak], dem: &Dem, area: &BoundingBox) -> Self {
-        let peak_differences = peaks
+    /// Compares `routes` (with elevation added) and the named summits among `places` inside `area`.
+    pub fn new(routes: &[Route], places: &[Place], dem: &Dem, area: &BoundingBox) -> Self {
+        // Named summits with a mapped elevation
+        let peak_differences = places
             .iter()
-            .filter(|peak| area.contains(peak.position))
-            .filter_map(|peak| dem.elevation(peak.position).map(|ele| ele - peak.ele))
+            .filter(|place| place.kind == Kind::Peak && place.tag("name").is_some())
+            .filter(|place| area.contains(place.position))
+            .filter_map(|place| {
+                let mapped = place.mapped_ele()?;
+                dem.elevation(place.position).map(|ele| ele - mapped)
+            })
             .collect();
         let ascents = routes
             .iter()

@@ -5,7 +5,10 @@
 #         scripts/build-routes.sh test     small area around Pania della Croce (TEST_BBOX), ~30 routes
 # Output: out/routes/routes.geojson  full catalogue, ODbL (build output, too big to publish)
 #         out/routes/index.json      every route's fields + bounding box, no geometry (published)
-#         out/routes/report.md       complete/incomplete counts, incomplete CAI routes to fix in OSM
+#         out/routes/report.md       complete/incomplete counts, incomplete CAI routes to fix in OSM,
+#                                    elevation checks, places counts
+#         out/places/places.geojson  places index: peaks, passes, huts, water, trailheads,
+#                                    settlements (aret-maps#6; not published, for the backend)
 #         out/routes/tiles/          vector tiles, layer "routes", z9–14, clipped to the area (published)
 #
 # Needs: data/sources/italy.osm.pbf (downloaded by scripts/build-pilot.sh), Rust (rustup),

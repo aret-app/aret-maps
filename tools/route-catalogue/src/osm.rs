@@ -8,6 +8,8 @@ use std::path::Path;
 
 use osmpbf::{Element, ElementReader, RelMemberType};
 
+use crate::places::{self, Place};
+
 /// OpenStreetMap tags the catalogue keeps from each route relation.
 pub const KEPT_TAGS: &[&str] = &[
     "name",
@@ -31,8 +33,10 @@ pub type WayNodes = HashMap<i64, Vec<i64>>;
 /// Position of each node, (longitude, latitude), by node id.
 pub type NodePositions = HashMap<i64, (f64, f64)>;
 
-/// Result of the node pass: positions of the wanted nodes, and the summits found.
-type NodesAndPeaks = (Vec<(i64, (f64, f64))>, Vec<Peak>);
+/// Result of the node pass: positions of the wanted nodes, and the places mapped as nodes.
+type NodesAndPlaces = (Vec<(i64, (f64, f64))>, Vec<Place>);
+/// Result of the way pass: route member ways, and places mapped as ways (with their nodes).
+type WaysAndPlaces = (Vec<(i64, Vec<i64>)>, Vec<(Place, Vec<i64>)>);
 
 /// A `type=route` + `route=hiking` relation.
 #[derive(Debug, Clone, PartialEq)]
@@ -47,19 +51,6 @@ pub struct RouteRelation {
     pub has_sub_routes: bool,
 }
 
-/// A named summit with a mapped elevation, to check the elevation model against.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Peak {
-    /// OpenStreetMap node id.
-    pub id: i64,
-    /// `name` tag.
-    pub name: String,
-    /// `ele` tag, in metres.
-    pub ele: f64,
-    /// (longitude, latitude).
-    pub position: (f64, f64),
-}
-
 /// Everything needed to assemble the routes.
 pub struct RouteData {
     /// All hiking route relations in the file.
@@ -68,8 +59,8 @@ pub struct RouteData {
     pub ways: WayNodes,
     /// Position of each node of those ways.
     pub nodes: NodePositions,
-    /// Every named `natural=peak` with a numeric `ele`, anywhere in the file.
-    pub peaks: Vec<Peak>,
+    /// Every place (peak, pass, hut, water, trailhead, car park, settlement) in the file.
+    pub places: Vec<Place>,
 }
 
 /// Reads all hiking route relations of `path` with their ways and nodes.
@@ -87,22 +78,33 @@ pub fn read(path: &Path) -> Result<RouteData, osmpbf::Error> {
         .iter()
         .flat_map(|relation| relation.way_ids.iter().copied())
         .collect();
-    let ways: WayNodes = ElementReader::from_path(path)?
-        .par_map_reduce(
-            |element| match element {
-                Element::Way(way) if wanted_ways.contains(&way.id()) => {
-                    vec![(way.id(), way.refs().collect::<Vec<i64>>())]
-                }
-                _ => Vec::new(),
-            },
-            Vec::new,
-            concat,
-        )?
-        .into_iter()
-        .collect();
+    let (route_ways, way_places): WaysAndPlaces = ElementReader::from_path(path)?.par_map_reduce(
+        |element| {
+            let Element::Way(way) = element else {
+                return (Vec::new(), Vec::new());
+            };
+            let route_way = if wanted_ways.contains(&way.id()) {
+                vec![(way.id(), way.refs().collect::<Vec<i64>>())]
+            } else {
+                Vec::new()
+            };
+            let tags: Vec<(&str, &str)> = way.tags().collect();
+            let place = place("way", way.id(), (0.0, 0.0), &tags)
+                .map(|place| (place, way.refs().collect::<Vec<i64>>()));
+            (route_way, place.into_iter().collect())
+        },
+        || (Vec::new(), Vec::new()),
+        |(a1, b1), (a2, b2)| (concat(a1, a2), concat(b1, b2)),
+    )?;
+    let ways: WayNodes = route_ways.into_iter().collect();
 
-    let wanted_nodes: HashSet<i64> = ways.values().flatten().copied().collect();
-    let (node_list, peaks): NodesAndPeaks = ElementReader::from_path(path)?.par_map_reduce(
+    let wanted_nodes: HashSet<i64> = ways
+        .values()
+        .flatten()
+        .chain(way_places.iter().flat_map(|(_, refs)| refs.iter()))
+        .copied()
+        .collect();
+    let (node_list, mut places): NodesAndPlaces = ElementReader::from_path(path)?.par_map_reduce(
         |element| {
             let (id, position, tags): (i64, (f64, f64), Vec<(&str, &str)>) = match element {
                 Element::DenseNode(node) => {
@@ -116,18 +118,38 @@ pub fn read(path: &Path) -> Result<RouteData, osmpbf::Error> {
             } else {
                 Vec::new()
             };
-            (wanted, peak(id, position, &tags).into_iter().collect())
+            (
+                wanted,
+                place("node", id, position, &tags).into_iter().collect(),
+            )
         },
         || (Vec::new(), Vec::new()),
         |(a1, b1), (a2, b2)| (concat(a1, a2), concat(b1, b2)),
     )?;
     let nodes: NodePositions = node_list.into_iter().collect();
 
+    // Places mapped as ways (huts as buildings, car parks as areas): the centre of their nodes
+    for (mut place, refs) in way_places {
+        let points: Vec<(f64, f64)> = refs
+            .iter()
+            .filter_map(|node| nodes.get(node).copied())
+            .collect();
+        if points.is_empty() {
+            continue;
+        }
+        let n = points.len() as f64;
+        place.position = (
+            points.iter().map(|p| p.0).sum::<f64>() / n,
+            points.iter().map(|p| p.1).sum::<f64>() / n,
+        );
+        places.push(place);
+    }
+
     Ok(RouteData {
         relations,
         ways,
         nodes,
-        peaks,
+        places,
     })
 }
 
@@ -166,27 +188,25 @@ fn hiking_route(relation: &osmpbf::Relation<'_>) -> Option<RouteRelation> {
     })
 }
 
-/// The node as a [`Peak`] if it is a named summit with a numeric elevation (`1859`, `1859 m`).
-fn peak(id: i64, position: (f64, f64), tags: &[(&str, &str)]) -> Option<Peak> {
-    let tag = |key: &str| {
-        tags.iter()
-            .find(|(k, _)| *k == key)
-            .map(|(_, value)| *value)
-    };
-    if tag("natural")? != "peak" {
-        return None;
-    }
-    let ele: f64 = tag("ele")?
-        .trim()
-        .trim_end_matches('m')
-        .trim()
-        .replace(',', ".")
-        .parse()
-        .ok()?;
-    Some(Peak {
+/// The feature as a [`Place`] if its tags make it one.
+fn place(
+    osm_type: &'static str,
+    id: i64,
+    position: (f64, f64),
+    tags: &[(&str, &str)],
+) -> Option<Place> {
+    let (kind, subkind) = places::classify(tags)?;
+    let kept = tags
+        .iter()
+        .filter(|(key, _)| places::KEPT_TAGS.contains(key))
+        .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+        .collect();
+    Some(Place {
+        osm_type,
         id,
-        name: tag("name")?.to_owned(),
-        ele,
+        kind,
+        subkind,
+        tags: kept,
         position,
     })
 }

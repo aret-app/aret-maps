@@ -10,6 +10,7 @@
 //! - `routes.geojson`: the catalogue (ODbL, "© OpenStreetMap contributors")
 //! - `index.json`: the same without geometry, plus each route's bounding box (published)
 //! - `report.md`: complete/incomplete counts and the incomplete CAI routes to fix in OSM
+//! - `../places/places.geojson`: peaks, passes, huts, water, trailheads, settlements (aret-maps#6)
 //!
 //! With a folder of TINITALY tiles (aret-maps#5), each route also gets ascent, descent, lowest and
 //! highest point, a profile and a walking time, and the report compares them with what mappers
@@ -22,6 +23,7 @@ mod catalogue;
 mod dem;
 mod elevation;
 mod osm;
+mod places;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -98,20 +100,29 @@ fn run(
         .collect();
     routes.sort_by_key(|route| route.relation.id);
 
-    let check = match &dem_folder {
-        Some(folder) => {
-            let dem = Dem::open(folder)?;
+    let dem: Option<Dem> = dem_folder.as_deref().map(Dem::open).transpose()?;
+    let check = match &dem {
+        Some(dem) => {
             eprintln!("adding elevation from {} tiles …", dem.tile_count());
             for route in &mut routes {
-                route.add_elevation(&dem);
+                route.add_elevation(dem);
             }
-            Some(ElevationCheck::new(&routes, &data.peaks, &dem, area))
+            Some(ElevationCheck::new(&routes, &data.places, dem, area))
         }
         None => {
             eprintln!("no elevation tiles given: routes without ascent, descent and time");
             None
         }
     };
+
+    // Places (aret-maps#6) go next to the routes: out/routes → out/places
+    let places = places::select(data.places, &routes, area);
+    let places_folder = output.with_file_name("places");
+    std::fs::create_dir_all(&places_folder)?;
+    std::fs::write(
+        places_folder.join("places.geojson"),
+        serde_json::to_vec(&places::to_geojson(&places, dem.as_ref()))?,
+    )?;
 
     std::fs::create_dir_all(output)?;
     let geojson_path = output.join("routes.geojson");
@@ -123,7 +134,9 @@ fn run(
         output.join("index.json"),
         serde_json::to_vec(&catalogue::to_index(&routes))?,
     )?;
-    let report = catalogue::report(&routes, area, check.as_ref());
+    let mut report = catalogue::report(&routes, area, check.as_ref());
+    report.push('\n');
+    report.push_str(&places::report(&places));
     std::fs::write(output.join("report.md"), &report)?;
 
     let summary: String = report
@@ -134,9 +147,11 @@ fn run(
         .join("\n");
     eprintln!("{summary}");
     eprintln!(
-        "wrote {} routes to {}, index.json and report.md ({:.0} s)",
+        "wrote {} routes to {}, index.json and report.md; {} places to {} ({:.0} s)",
         routes.len(),
         geojson_path.display(),
+        places.len(),
+        places_folder.join("places.geojson").display(),
         started.elapsed().as_secs_f64()
     );
     Ok(())
