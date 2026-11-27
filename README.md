@@ -86,16 +86,17 @@ Names are never invented: many CAI routes only have a `ref` (show them as "CAI 1
 
 ### Build
 Needs Rust ([rustup](https://rustup.rs); the version is pinned in `rust-toolchain.toml`) and
-`brew install tippecanoe`, plus `data/sources/italy.osm.pbf` from `scripts/build-pilot.sh`.
+`brew install tippecanoe`, plus `data/sources/italy.osm.pbf` from `scripts/build-pilot.sh` and the
+elevation tiles from `scripts/fetch-dem.sh`.
 ```bash
-scripts/build-routes.sh test   # ~30 routes around Pania della Croce (TEST_BBOX), to try things out
-scripts/build-routes.sh        # whole pilot region, ~3,500 routes, ~1 minute
+scripts/fetch-dem.sh test && scripts/build-routes.sh test   # ~30 routes around Pania della Croce
+scripts/fetch-dem.sh && scripts/build-routes.sh             # whole pilot region, ~3,500 routes
 ```
 Output in `out/routes/`:
 
 | File | What | Published |
 |---|---|---|
-| `routes.geojson` | Full catalogue: MultiLineString per route + all fields | no (32 MB, over Pages' 25 MB limit) |
+| `routes.geojson` | Full catalogue: MultiLineString per route + all fields + elevation profiles | no (38 MB, over Pages' 25 MB limit) |
 | `index.json` | Every route's fields + `bbox`, no geometry (list and search) | `/routes/index.json` |
 | `tiles/` | Vector tiles, layer `routes`, z9–14, clipped to the area | `/routes/{z}/{x}/{y}.pbf` |
 | `report.md` | Complete/incomplete counts, incomplete CAI routes with OSM links | no |
@@ -132,6 +133,36 @@ tippecanoe and Rust.
 **Licence:** the catalogue is derived from OpenStreetMap, so as a database it is **ODbL**, and every map
 or export showing routes credits "© OpenStreetMap contributors".
 
+### Elevation: ascent, descent, walking time (aret-maps#5)
+Each route gets **ascent and descent, lowest and highest point, start and end elevation, a walking time up
+and back, and an elevation profile** from the TINITALY 1.1 elevation model of Italy.
+
+- **Data:** [TINITALY 1.1](https://tinitaly.pi.ingv.it/) (INGV): a 10 m model of the ground, not
+  the treetops, so forest doesn't add fake climbing. CC BY 4.0, credit required:
+  > Tarquini S., Isola I., Favalli M., Battistini A., Dotta G. (2023). TINITALY, a digital elevation model
+  > of Italy with a 10 meters cell size (Version 1.1). INGV. https://doi.org/10.13127/tinitaly/1.1
+
+  `scripts/fetch-dem.sh [test]` downloads the tiles the area needs once, into git-ignored
+  `data/dem/tinitaly/` (15 tiles, ~1.4 GB for the pilot region). `route-catalogue dem-tiles <bbox>`
+  lists them.
+- **Direction:** a route that is one line starts at its **lower end** (usually the valley); its ascent and
+  `duration_min` are for going up, `duration_reverse_min` for coming back.
+- **Ascent/descent:** profile sampled every 10 m, smoothed over 30 m, changes counted from 3 m, so paths
+  crossing steep slopes don't collect fake climbing from a few metres of position error. Calibrated
+  against the 1,812 pilot routes that carry a mapped `ascent` (ours −3% on median) and 53 with a mapped
+  `duration`, mostly CAI sign times (ours −5% on median, 8% apart); the table is in
+  [`elevation.rs`](tools/route-catalogue/src/elevation.rs).
+- **Walking time:** DIN 33466, as used by the Alpine clubs: 4 km/h on the flat, 300 m/h up, 500 m/h down;
+  the larger of distance and climbing time counts fully, the other half. An estimate without breaks.
+  Only for complete single-line routes: no time across gaps or summed over branches.
+- **Check:** `report.md` compares the model with every named summit that has an `ele` tag, and our
+  ascent and time with routes that carry `ascent`/`duration` tags.
+
+New fields: `ascent_m`, `descent_m`, `ele_min`, `ele_max`, `ele_start`, `ele_end`, `duration_min`,
+`duration_reverse_min` (all `null` when the route leaves the model's area); `routes.geojson` also has
+`profiles` (per line, `[distance m, elevation m]` every 50 m). The tiles carry ascent, descent, highest
+point and both times.
+
 ### Last build (2026-11-26, extract of 2026-11-15)
 | | |
 |---|---|
@@ -140,4 +171,6 @@ or export showing routes credits "© OpenStreetMap contributors".
 | Difficulty | E 2,448 · T 477 · EE 193 · EEA 5 · unknown 354 |
 | Vector tiles | 5,607 tiles, 28 MB, largest 189 KB (z14: 3,942 · z13: 1,185 · z12: 340 · z11: 97 · z10: 31 · z9: 12) |
 | With the basemap | ~14,040 files: ✓ under Cloudflare Pages' 20,000-file limit |
-| Run time | ~50 s, ~1 GB memory (Apple Silicon) |
+| Elevation (2026-11-27) | 3,464 routes with ascent/descent, 3,165 with a walking time; highest route point 2,162 m (Monte Cimone) |
+| Elevation checks | 2,861 summits: model within 6.4 m of the mapped height (median); 1,812 mapped ascents: ours −3% (median); 53 mapped times: ours −5% (median, 8% apart) |
+| Run time | ~80 s with elevation, ~1 GB memory (Apple Silicon) |

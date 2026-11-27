@@ -18,6 +18,8 @@ osmpbf = "0.3.8"
 # geodesic lengths on the WGS 84 ellipsoid (same as PostGIS geography in aret-backend)
 geo = { version = "0.33.1", default-features = false }
 serde_json = "1.0"
+# WGS 84 → UTM for the TINITALY elevation model (pure Rust port of PROJ)
+proj4rs = { version = "0.3.1", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

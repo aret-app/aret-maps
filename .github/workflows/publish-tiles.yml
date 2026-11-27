@@ -181,6 +181,17 @@ jobs:
           LIST
           ls -lh data/sources
 
+      # Elevation model (TINITALY 1.1, INGV, CC BY 4.0; aret-maps#5): ~1.3 GB, rarely changes, so
+      # cached until the area changes and downloaded only when the cache is gone
+      - name: Cache elevation tiles
+        uses: actions/cache@v5
+        with:
+          path: data/dem/tinitaly
+          key: tinitaly-1.1-${{ hashFiles('config/pilot-region.env') }}
+
+      - name: Download missing elevation tiles
+        run: scripts/fetch-dem.sh
+
       - name: Keep this extract for dry runs
         if: github.event_name != 'pull_request'
         uses: actions/cache/save@v5
