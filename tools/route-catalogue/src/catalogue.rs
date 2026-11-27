@@ -6,7 +6,9 @@ use geo::{Geodesic, Length, LineString};
 use serde_json::{Value, json};
 
 use crate::assemble::{self, Way};
-use crate::osm::{NodePositions, RouteRelation, WayNodes};
+use crate::dem::Dem;
+use crate::elevation::{self, LineElevation};
+use crate::osm::{NodePositions, Peak, RouteRelation, WayNodes};
 
 /// Area to keep, in degrees: west, south, east, north.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -57,12 +59,61 @@ pub struct Route {
     pub missing_ways: usize,
     /// Total length of all lines on the WGS 84 ellipsoid, in metres.
     pub length_m: f64,
+    /// Elevation of each line (same order and direction as `lines`), when the elevation model
+    /// covers the whole route.
+    pub elevation: Option<Vec<LineElevation>>,
 }
 
 impl Route {
     /// Whether the route is one connected line with all its ways present.
     pub fn is_complete(&self) -> bool {
         self.pieces == 1 && self.missing_ways == 0 && !self.relation.has_sub_routes
+    }
+
+    /// Adds elevation from `dem`. A route that is one line is turned to start at its lower end
+    /// (usually the valley), so its ascent and time are for going up.
+    pub fn add_elevation(&mut self, dem: &Dem) {
+        let lines: Option<Vec<LineElevation>> = self
+            .lines
+            .iter()
+            .map(|line| elevation::line_elevation(line, dem))
+            .collect();
+        let Some(mut lines) = lines else {
+            self.elevation = None;
+            return;
+        };
+        if let ([line], [geometry]) = (lines.as_mut_slice(), self.lines.as_mut_slice())
+            && line.start() > line.end()
+        {
+            *line = line.reversed();
+            geometry.reverse();
+        }
+        self.elevation = Some(lines);
+    }
+
+    /// Walking times up and back (DIN 33466), only for a complete route that is a single line:
+    /// a time across a gap or summed over branches would be invented.
+    pub fn walking_minutes(&self) -> Option<(u32, u32)> {
+        let lines = self.elevation.as_ref()?;
+        let [line] = lines.as_slice() else {
+            return None;
+        };
+        if !self.is_complete() {
+            return None;
+        }
+        let length = line.length_m();
+        Some((
+            elevation::walking_minutes(length, line.ascent_m, line.descent_m),
+            elevation::walking_minutes(length, line.descent_m, line.ascent_m),
+        ))
+    }
+
+    /// Total ascent and descent over all lines.
+    pub fn climb(&self) -> Option<(f64, f64)> {
+        let lines = self.elevation.as_ref()?;
+        Some(lines.iter().fold((0.0, 0.0), |(up, down), line| {
+            (up + line.ascent_m, down + line.descent_m)
+        }))
     }
 
     /// Whether the Club Alpino Italiano maintains it: CAI operator, or a `cai_scale` grade.
@@ -114,7 +165,52 @@ impl Route {
             "missing_ways": self.missing_ways,
             "has_sub_routes": self.relation.has_sub_routes,
             "complete": self.is_complete(),
+            "ascent_m": self.climb().map(|(up, _)| up.round()),
+            "descent_m": self.climb().map(|(_, down)| down.round()),
+            "ele_min": self.elevation_range().map(|(low, _)| low.round()),
+            "ele_max": self.elevation_range().map(|(_, high)| high.round()),
+            "ele_start": self.single_line().map(|line| line.start().round()),
+            "ele_end": self.single_line().map(|line| line.end().round()),
+            "duration_min": self.walking_minutes().map(|(up, _)| up),
+            "duration_reverse_min": self.walking_minutes().map(|(_, back)| back),
         })
+    }
+
+    fn single_line(&self) -> Option<&LineElevation> {
+        match self.elevation.as_deref() {
+            Some([line]) => Some(line),
+            _ => None,
+        }
+    }
+
+    fn elevation_range(&self) -> Option<(f64, f64)> {
+        let lines = self.elevation.as_ref()?;
+        Some(lines.iter().map(LineElevation::range).fold(
+            (f64::MAX, f64::MIN),
+            |(low, high), (line_low, line_high)| (low.min(line_low), high.max(line_high)),
+        ))
+    }
+
+    /// Elevation profiles for charts: per line, [distance m, elevation m] every 50 m.
+    fn profiles(&self) -> Value {
+        let Some(lines) = &self.elevation else {
+            return Value::Null;
+        };
+        let every = (50.0 / elevation::STEP_M) as usize;
+        json!(
+            lines
+                .iter()
+                .map(|line| {
+                    let last = line.profile.len().saturating_sub(1);
+                    line.profile
+                        .iter()
+                        .enumerate()
+                        .filter(|(index, _)| index % every == 0 || *index == last)
+                        .map(|(_, &(distance, ele))| [distance.round(), ele.round()])
+                        .collect::<Vec<[f64; 2]>>()
+                })
+                .collect::<Vec<Vec<[f64; 2]>>>()
+        )
     }
 
     /// Bounding box of all lines: [west, south, east, north].
@@ -151,11 +247,13 @@ impl Route {
                     .collect()
             })
             .collect();
+        let mut properties = self.properties();
+        properties["profiles"] = self.profiles();
         json!({
             "type": "Feature",
             "id": self.relation.id,
             "geometry": { "type": "MultiLineString", "coordinates": coordinates },
-            "properties": self.properties(),
+            "properties": properties,
         })
     }
 }
@@ -215,6 +313,7 @@ pub fn build_route(
         pieces: assembly.pieces,
         missing_ways,
         length_m,
+        elevation: None,
     })
 }
 
@@ -225,8 +324,17 @@ pub fn to_geojson(routes: &[Route]) -> Value {
         "type": "FeatureCollection",
         "license": "ODbL-1.0",
         "attribution": "© OpenStreetMap contributors",
+        "elevation_source": elevation_source(routes),
         "features": routes.iter().map(Route::to_feature).collect::<Vec<Value>>(),
     })
+}
+
+/// Credit for the elevation model (CC BY 4.0), when any route has elevation.
+fn elevation_source(routes: &[Route]) -> Option<&'static str> {
+    routes
+        .iter()
+        .any(|route| route.elevation.is_some())
+        .then_some(crate::dem::CITATION)
 }
 
 /// The index: every route's catalogue fields and bounding box, without geometry. Small enough to
@@ -236,12 +344,194 @@ pub fn to_index(routes: &[Route]) -> Value {
     json!({
         "license": "ODbL-1.0",
         "attribution": "© OpenStreetMap contributors",
+        "elevation_source": elevation_source(routes),
         "routes": routes.iter().map(Route::to_index_entry).collect::<Vec<Value>>(),
     })
 }
 
+/// How our elevation numbers compare with what mappers recorded in OpenStreetMap.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ElevationCheck {
+    /// Elevation-model tiles used.
+    pub tiles: usize,
+    /// Summits in the area: model elevation − mapped `ele`, in metres.
+    pub peak_differences: Vec<f64>,
+    /// Routes with an `ascent` tag: (mapped, our ascent, our descent), in metres.
+    pub ascents: Vec<(f64, f64, f64)>,
+    /// Routes with a `duration` tag: (mapped, ours up, ours back), in minutes.
+    pub durations: Vec<(f64, f64, f64)>,
+}
+
+impl ElevationCheck {
+    /// Compares `routes` (with elevation added) and the summits of `peaks` inside `area`.
+    pub fn new(routes: &[Route], peaks: &[Peak], dem: &Dem, area: &BoundingBox) -> Self {
+        let peak_differences = peaks
+            .iter()
+            .filter(|peak| area.contains(peak.position))
+            .filter_map(|peak| dem.elevation(peak.position).map(|ele| ele - peak.ele))
+            .collect();
+        let ascents = routes
+            .iter()
+            .filter_map(|route| {
+                let mapped = parse_metres(route.tag("ascent")?)?;
+                let (up, down) = route.climb()?;
+                Some((mapped, up, down))
+            })
+            .collect();
+        let durations = routes
+            .iter()
+            .filter_map(|route| {
+                let mapped = parse_duration_minutes(route.tag("duration")?)?;
+                let (up, back) = route.walking_minutes()?;
+                Some((mapped, f64::from(up), f64::from(back)))
+            })
+            .collect();
+        Self {
+            tiles: dem.tile_count(),
+            peak_differences,
+            ascents,
+            durations,
+        }
+    }
+}
+
+/// `850`, `850 m`, `850m` → 850.
+fn parse_metres(text: &str) -> Option<f64> {
+    text.trim()
+        .trim_end_matches('m')
+        .trim()
+        .replace(',', ".")
+        .parse()
+        .ok()
+}
+
+/// `3:30`, `03:30`, `3:30:00` (OSM's usual forms) → 210.
+fn parse_duration_minutes(text: &str) -> Option<f64> {
+    let mut parts = text.trim().split(':');
+    let hours: f64 = parts.next()?.trim().parse().ok()?;
+    let minutes: f64 = parts.next().map_or(Some(0.0), |m| m.trim().parse().ok())?;
+    Some(hours * 60.0 + minutes)
+}
+
+fn median(mut values: Vec<f64>) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    values.sort_by(f64::total_cmp);
+    Some(values[values.len() / 2])
+}
+
+fn percentile(mut values: Vec<f64>, share: f64) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    values.sort_by(f64::total_cmp);
+    let index = ((values.len() - 1) as f64 * share).round() as usize;
+    Some(values[index])
+}
+
+/// The elevation part of the report.
+fn elevation_report(routes: &[Route], check: &ElevationCheck) -> String {
+    let mut text = String::new();
+    let with_elevation = routes.iter().filter(|r| r.elevation.is_some()).count();
+    let with_time = routes
+        .iter()
+        .filter(|r| r.walking_minutes().is_some())
+        .count();
+    let _ = writeln!(
+        text,
+        "## Elevation (TINITALY 1.1, INGV, 10 m, {} tiles)\n",
+        check.tiles
+    );
+    let _ = writeln!(
+        text,
+        "- Routes with elevation: {with_elevation} of {} (the rest leave the area the model tiles cover)",
+        routes.len()
+    );
+    let _ = writeln!(
+        text,
+        "- Routes with a walking time (complete, single line): {with_time}; DIN 33466, an estimate\n"
+    );
+
+    let absolute: Vec<f64> = check.peak_differences.iter().map(|d| d.abs()).collect();
+    let _ = writeln!(text, "### Check: summits");
+    match (median(absolute.clone()), percentile(absolute.clone(), 0.9)) {
+        (Some(mid), Some(p90)) => {
+            let off = absolute.iter().filter(|&&d| d > 30.0).count();
+            let _ = writeln!(
+                text,
+                "{} named summits with an `ele` tag in the area: model − mapped elevation is {mid:.1} m \
+                 (median, absolute), {p90:.1} m at the 90th percentile; {off} differ by more than 30 m \
+                 (TINITALY is built from contour lines and rounds off sharp tops, so it reads a few metres low; \
+                 on Apuane slopes a summit node placed 20 m off the top changes the height by 20 m; some `ele` \
+                 tags are wrong).\n",
+                absolute.len()
+            );
+        }
+        _ => {
+            let _ = writeln!(text, "No summits with an `ele` tag in the area.\n");
+        }
+    }
+
+    let _ = writeln!(text, "### Check: routes with an `ascent` tag");
+    if check.ascents.is_empty() {
+        let _ = writeln!(text, "None in the area.\n");
+    } else {
+        // The tag may be for either direction: compare with the closer of our ascent and descent
+        let relative: Vec<f64> = check
+            .ascents
+            .iter()
+            .filter(|(mapped, _, _)| *mapped > 0.0)
+            .map(|(mapped, up, down)| {
+                let ours = if (up - mapped).abs() < (down - mapped).abs() {
+                    up
+                } else {
+                    down
+                };
+                (ours - mapped) / mapped
+            })
+            .collect();
+        let _ = writeln!(
+            text,
+            "{} routes: our ascent differs from the mapped one by {:+.0}% (median), {:.0}% (median, absolute). \
+             Mapped values are often net climbs or estimates; treat this as a rough check.\n",
+            check.ascents.len(),
+            100.0 * median(relative.clone()).unwrap_or(0.0),
+            100.0 * median(relative.iter().map(|r| r.abs()).collect()).unwrap_or(0.0),
+        );
+    }
+
+    let _ = writeln!(text, "### Check: routes with a `duration` tag");
+    if check.durations.is_empty() {
+        let _ = writeln!(text, "None in the area.\n");
+    } else {
+        // The mapped time's direction is unknown: compare with the closer of up and back
+        let relative: Vec<f64> = check
+            .durations
+            .iter()
+            .filter(|(mapped, _, _)| *mapped > 0.0)
+            .map(|(mapped, up, back)| {
+                let ours = if (up - mapped).abs() < (back - mapped).abs() {
+                    up
+                } else {
+                    back
+                };
+                (ours - mapped) / mapped
+            })
+            .collect();
+        let _ = writeln!(
+            text,
+            "{} routes: our time differs from the mapped one by {:+.0}% (median), {:.0}% (median, absolute).\n",
+            check.durations.len(),
+            100.0 * median(relative.clone()).unwrap_or(0.0),
+            100.0 * median(relative.iter().map(|r| r.abs()).collect()).unwrap_or(0.0),
+        );
+    }
+    text
+}
+
 /// A Markdown report: how many routes, and which CAI routes are incomplete (to fix in OSM).
-pub fn report(routes: &[Route], area: &BoundingBox) -> String {
+pub fn report(routes: &[Route], area: &BoundingBox, check: Option<&ElevationCheck>) -> String {
     let count = |filter: &dyn Fn(&Route) -> bool| routes.iter().filter(|r| filter(r)).count();
     let total = routes.len();
     let complete = count(&|r| r.is_complete());
@@ -314,6 +604,10 @@ pub fn report(routes: &[Route], area: &BoundingBox) -> String {
             route.relation.id,
             route.relation.id
         );
+    }
+    if let Some(check) = check {
+        text.push('\n');
+        text.push_str(&elevation_report(routes, check));
     }
     text
 }

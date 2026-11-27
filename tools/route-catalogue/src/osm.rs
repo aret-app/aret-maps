@@ -20,12 +20,19 @@ pub const KEPT_TAGS: &[&str] = &[
     "from",
     "to",
     "osmc:symbol",
+    // What mappers recorded, used only to check our own numbers (aret-maps#5)
+    "ascent",
+    "descent",
+    "duration",
 ];
 
 /// Node ids of each way, by way id.
 pub type WayNodes = HashMap<i64, Vec<i64>>;
 /// Position of each node, (longitude, latitude), by node id.
 pub type NodePositions = HashMap<i64, (f64, f64)>;
+
+/// Result of the node pass: positions of the wanted nodes, and the summits found.
+type NodesAndPeaks = (Vec<(i64, (f64, f64))>, Vec<Peak>);
 
 /// A `type=route` + `route=hiking` relation.
 #[derive(Debug, Clone, PartialEq)]
@@ -40,6 +47,19 @@ pub struct RouteRelation {
     pub has_sub_routes: bool,
 }
 
+/// A named summit with a mapped elevation, to check the elevation model against.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Peak {
+    /// OpenStreetMap node id.
+    pub id: i64,
+    /// `name` tag.
+    pub name: String,
+    /// `ele` tag, in metres.
+    pub ele: f64,
+    /// (longitude, latitude).
+    pub position: (f64, f64),
+}
+
 /// Everything needed to assemble the routes.
 pub struct RouteData {
     /// All hiking route relations in the file.
@@ -48,6 +68,8 @@ pub struct RouteData {
     pub ways: WayNodes,
     /// Position of each node of those ways.
     pub nodes: NodePositions,
+    /// Every named `natural=peak` with a numeric `ele`, anywhere in the file.
+    pub peaks: Vec<Peak>,
 }
 
 /// Reads all hiking route relations of `path` with their ways and nodes.
@@ -80,27 +102,32 @@ pub fn read(path: &Path) -> Result<RouteData, osmpbf::Error> {
         .collect();
 
     let wanted_nodes: HashSet<i64> = ways.values().flatten().copied().collect();
-    let nodes: NodePositions = ElementReader::from_path(path)?
-        .par_map_reduce(
-            |element| match element {
-                Element::DenseNode(node) if wanted_nodes.contains(&node.id()) => {
-                    vec![(node.id(), (node.lon(), node.lat()))]
+    let (node_list, peaks): NodesAndPeaks = ElementReader::from_path(path)?.par_map_reduce(
+        |element| {
+            let (id, position, tags): (i64, (f64, f64), Vec<(&str, &str)>) = match element {
+                Element::DenseNode(node) => {
+                    (node.id(), (node.lon(), node.lat()), node.tags().collect())
                 }
-                Element::Node(node) if wanted_nodes.contains(&node.id()) => {
-                    vec![(node.id(), (node.lon(), node.lat()))]
-                }
-                _ => Vec::new(),
-            },
-            Vec::new,
-            concat,
-        )?
-        .into_iter()
-        .collect();
+                Element::Node(node) => (node.id(), (node.lon(), node.lat()), node.tags().collect()),
+                _ => return (Vec::new(), Vec::new()),
+            };
+            let wanted = if wanted_nodes.contains(&id) {
+                vec![(id, position)]
+            } else {
+                Vec::new()
+            };
+            (wanted, peak(id, position, &tags).into_iter().collect())
+        },
+        || (Vec::new(), Vec::new()),
+        |(a1, b1), (a2, b2)| (concat(a1, a2), concat(b1, b2)),
+    )?;
+    let nodes: NodePositions = node_list.into_iter().collect();
 
     Ok(RouteData {
         relations,
         ways,
         nodes,
+        peaks,
     })
 }
 
@@ -136,6 +163,31 @@ fn hiking_route(relation: &osmpbf::Relation<'_>) -> Option<RouteRelation> {
         tags,
         way_ids,
         has_sub_routes,
+    })
+}
+
+/// The node as a [`Peak`] if it is a named summit with a numeric elevation (`1859`, `1859 m`).
+fn peak(id: i64, position: (f64, f64), tags: &[(&str, &str)]) -> Option<Peak> {
+    let tag = |key: &str| {
+        tags.iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, value)| *value)
+    };
+    if tag("natural")? != "peak" {
+        return None;
+    }
+    let ele: f64 = tag("ele")?
+        .trim()
+        .trim_end_matches('m')
+        .trim()
+        .replace(',', ".")
+        .parse()
+        .ok()?;
+    Some(Peak {
+        id,
+        name: tag("name")?.to_owned(),
+        ele,
+        position,
     })
 }
 

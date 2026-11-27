@@ -9,7 +9,8 @@
 #         out/routes/tiles/          vector tiles, layer "routes", z9–14, clipped to the area (published)
 #
 # Needs: data/sources/italy.osm.pbf (downloaded by scripts/build-pilot.sh), Rust (rustup),
-#        tippecanoe (brew install tippecanoe). Area: config/pilot-region.env.
+#        tippecanoe (brew install tippecanoe), and the elevation tiles from
+#        scripts/fetch-dem.sh (same "test" argument). Area: config/pilot-region.env.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -27,7 +28,9 @@ command -v tippecanoe >/dev/null || { echo "tippecanoe not found: brew install t
 
 echo "==> Route catalogue (Rust, tools/route-catalogue)"
 rm -rf out/routes
-cargo run --quiet --release --package route-catalogue -- "$INPUT" "$AREA" out/routes
+DEM="data/dem/tinitaly"
+[[ -n "$(ls "$DEM"/*.tif 2>/dev/null)" ]] || { echo "no elevation tiles in $DEM: run  scripts/fetch-dem.sh ${1:-}  first"; exit 1; }
+cargo run --quiet --release --package route-catalogue -- "$INPUT" "$AREA" out/routes "$DEM"
 
 echo "==> Vector tiles: out/routes/tiles/ (layer 'routes')"
 # Only the fields the map needs; the rest is in index.json. Low zooms drop the shortest routes
@@ -40,8 +43,9 @@ tippecanoe --force --quiet \
   --clip-bounding-box="$AREA" \
   --drop-smallest-as-needed \
   --no-tile-compression \
-  --attribution='<a href="https://www.openstreetmap.org/copyright">© OpenStreetMap contributors</a>' \
+  --attribution='<a href="https://www.openstreetmap.org/copyright">© OpenStreetMap contributors</a>; elevation <a href="https://doi.org/10.13127/tinitaly/1.1">TINITALY/INGV</a> (CC BY 4.0)' \
   -y osm_id -y name -y ref -y network -y cai -y difficulty -y complete -y osmc_symbol -y length_m \
+  -y ascent_m -y descent_m -y ele_max -y duration_min -y duration_reverse_min \
   out/routes/routes.geojson
 
 count=$(find out/routes/tiles -name '*.pbf' | wc -l | tr -d ' ')
