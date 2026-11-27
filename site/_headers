@@ -28,3 +28,18 @@
   Content-Type: application/json
   Access-Control-Allow-Origin: *
   Cache-Control: public, max-age=3600
+
+# Catalogue for the backend's places-svc (aret-backend#24): gzip files and their version.json.
+# Served as plain files (no Content-Encoding), so clients get exactly the bytes the checksum covers.
+/catalogue/*
+  Access-Control-Allow-Origin: *
+  Cache-Control: public, max-age=3600
+
+/catalogue/routes.geojson.gz
+  Content-Type: application/gzip
+
+/catalogue/places.geojson.gz
+  Content-Type: application/gzip
+
+/catalogue/version.json
+  Content-Type: application/json

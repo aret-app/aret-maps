@@ -137,6 +137,20 @@ Pilot region (2026-11-27): 22,089 places, of which searchable by name are 3,009 
 725 water points, 339 trailheads and 7,708 settlements. Spot-checked: Pania della Croce, Monte Cimone,
 Rifugio Enrico Rossi, Rifugio Cesare Battisti, Foce di Mosceta, Passo del Vestito, Levigliani, 46 bivouacs.
 
+## Catalogue for the backend (aret-backend#24)
+
+`scripts/build-routes.sh` also writes **`out/catalogue/`**, published with the tiles at
+`https://aret-tiles.pages.dev/catalogue/`:
+
+| File | What |
+|---|---|
+| `routes.geojson.gz` | The full route catalogue with elevation profiles, gzip (~11 MB; plain it's 38 MB, over Pages' 25 MB limit) |
+| `places.geojson.gz` | The places index, gzip (~0.6 MB) |
+| `version.json` | `built_at`, `osm_data_at` (the extract's own timestamp), area, licence, and per file `count`, `bytes`, `sha256` |
+
+The backend's places-svc checks `version.json` and loads a new build when it appears, verifying each file's
+SHA-256. Both files are ODbL: anyone may reuse them with "© OpenStreetMap contributors".
+
 ## Weekly rebuild (GitHub Actions)
 
 [`.github/workflows/publish-tiles.yml`](.github/workflows/publish-tiles.yml) rebuilds and republishes the
