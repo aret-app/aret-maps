@@ -115,8 +115,12 @@ pilot region **every Monday at 03:00 UTC** from a fresh OpenStreetMap extract (A
 OpenStreetMap reach Aret within a week. It runs the same three scripts as above, with pinned Planetiler,
 tippecanoe and Rust.
 
-- **Downloads:** the Italy extract once a week from Geofabrik. Sea polygons and Natural Earth are cached
-  for a month.
+- **Downloads:** the Italy extract once a week from Geofabrik, with retries and an MD5 check. If
+  Geofabrik stays unreachable (it has refused GitHub's runners for hours at a time), the same daily extract
+  comes from OpenStreetMap France; the run summary says which. Every download sends a User-Agent naming
+  this project. Sea polygons and Natural Earth are cached for a month.
+- **Dry runs reuse the extract** of the latest weekly build from the Actions cache, so testing a change
+  doesn't download Italy again.
 - **Safety:** it won't publish if the new build has more than 10% fewer routes than the live site. The
   build summary shows the route report; `report.md` and `index.json` are kept as artifacts for 30 days.
 - **Manual run:** Actions → *Publish map tiles* → *Run workflow*. Untick **deploy** for a dry run.
