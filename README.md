@@ -153,7 +153,7 @@ OpenStreetMap) and `out/gaps/trail-gaps.geojson` (all of them, to view on a map)
 on a path, footway, bridleway or steps (on a track a `ref` is often a forest road's number). Connected
 paths with the same number count as one trail. About 50 s and 450 MB for the pilot region.
 
-Pilot region, 2026-11-27 (OSM data of 2026-11-15):
+Pilot region, measured 2026-11-27 on the Italy extract downloaded 2026-11-15:
 
 | | Length |
 |---|---:|
