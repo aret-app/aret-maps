@@ -137,6 +137,38 @@ Pilot region (2026-11-27): 22,089 places, of which searchable by name are 3,009 
 725 water points, 339 trailheads and 7,708 settlements. Spot-checked: Pania della Croce, Monte Cimone,
 Rifugio Enrico Rossi, Rifugio Cesare Battisti, Foce di Mosceta, Passo del Vestito, Levigliani, 46 bivouacs.
 
+## Trail gaps: marked trails the catalogue can't see
+
+The catalogue (and the backend's tours) only knows trails that are in a hiking **route relation**
+(ADR-0015). `trail-gaps` measures what that leaves out:
+
+```bash
+source config/pilot-region.env
+cargo run --release --package route-catalogue -- trail-gaps data/sources/italy.osm.pbf "$BBOX" out/gaps
+```
+
+It writes `out/gaps/trail-gaps.md` (totals, and the 60 longest missing trails with links to fix them in
+OpenStreetMap) and `out/gaps/trail-gaps.geojson` (all of them, to view on a map). A path counts as
+**marked** if its tags say so: `osmc:symbol`, `cai_scale`, `trailblazed=yes`, or a trail number (`ref`)
+on a path, footway, bridleway or steps (on a track a `ref` is often a forest road's number). Connected
+paths with the same number count as one trail. About 50 s and 450 MB for the pilot region.
+
+Pilot region, 2026-11-27 (OSM data of 2026-11-15):
+
+| | Length |
+|---|---:|
+| Trails in hiking route relations (what the catalogue uses) | 15,609 km |
+| **Marked paths in no relation** | **39 km** (88 trails, 8 of them 1 km or more) |
+| Unmarked paths with a SAC grade | 1,668 km |
+| Other paths, footways and steps | 10,666 km |
+| Other tracks | 19,567 km |
+
+So the relations hold practically all marked trails here: what's missing is mostly **unmarked** paths,
+which only matter for routing over every path (ADR-0006, "design your own route"). The longest missing
+marked trails are short local paths (Marmitte dei Giganti 3 km, Sentiero del Catino 2 km) worth adding
+to OSM. Tours can also lose a stretch where a relation has a gap: see the incomplete routes in
+`out/routes/report.md`.
+
 ## Weekly rebuild (GitHub Actions)
 
 [`.github/workflows/publish-tiles.yml`](.github/workflows/publish-tiles.yml) rebuilds and republishes the

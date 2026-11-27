@@ -3,6 +3,7 @@
 //! ```text
 //! route-catalogue <input.osm.pbf> <west,south,east,north> <output-dir> [<elevation-tiles-dir>]
 //! route-catalogue dem-tiles <west,south,east,north>
+//! route-catalogue trail-gaps <input.osm.pbf> <west,south,east,north> <output-dir>
 //! ```
 //!
 //! Reads every `type=route` + `route=hiking` relation, assembles its ways into lines without ever
@@ -15,6 +16,8 @@
 //! With a folder of TINITALY tiles (aret-maps#5), each route also gets ascent, descent, lowest and
 //! highest point, a profile and a walking time, and the report compares them with what mappers
 //! recorded in OSM. `dem-tiles` prints the TINITALY tiles an area needs, for `scripts/fetch-dem.sh`.
+//! `trail-gaps` measures the marked trails missing from the catalogue because OSM has no route
+//! relation for them ([`gaps`]).
 //!
 //! Normally run by `scripts/build-routes.sh`.
 
@@ -22,6 +25,7 @@ mod assemble;
 mod catalogue;
 mod dem;
 mod elevation;
+mod gaps;
 mod osm;
 mod places;
 
@@ -35,7 +39,8 @@ use crate::dem::Dem;
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let usage = "usage: route-catalogue <input.osm.pbf> <west,south,east,north> <output-dir> \
-                 [<elevation-tiles-dir>]\n       route-catalogue dem-tiles <west,south,east,north>";
+                 [<elevation-tiles-dir>]\n       route-catalogue dem-tiles <west,south,east,north>\n       \
+                 route-catalogue trail-gaps <input.osm.pbf> <west,south,east,north> <output-dir>";
     let parse_area = |text: &str| {
         BoundingBox::parse(text)
             .ok_or("bounding box must be west,south,east,north, e.g. 9.29,43.79,11.38,44.80")
@@ -44,6 +49,9 @@ fn main() -> ExitCode {
         [command, bbox] if command == "dem-tiles" => parse_area(bbox)
             .map_err(Into::into)
             .and_then(print_dem_tiles),
+        [command, input, bbox, output] if command == "trail-gaps" => parse_area(bbox)
+            .map_err(Into::into)
+            .and_then(|area| gaps::run(&PathBuf::from(input), &area, &PathBuf::from(output))),
         [input, bbox, output, rest @ ..] if rest.len() <= 1 => {
             parse_area(bbox).map_err(Into::into).and_then(|area| {
                 run(
